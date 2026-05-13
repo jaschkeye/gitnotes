@@ -1,7 +1,7 @@
 import axios from 'axios'
 
-// 生产环境使用环境变量，开发环境使用本地地址
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
+// 生产环境使用Railway后端地址，开发环境使用本地地址
+const API_BASE = import.meta.env.VITE_API_URL || 'https://gitnotes-backend-production.up.railway.app/api'
 
 // 创建axios实例
 const api = axios.create({

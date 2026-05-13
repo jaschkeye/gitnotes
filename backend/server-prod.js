@@ -9,8 +9,11 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-// 中间件
-app.use(cors());
+// 中间件 - CORS 允许所有来源（生产环境可限制）
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // ============================================================
