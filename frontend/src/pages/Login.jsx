@@ -1,8 +1,6 @@
 import React, { useState } from 'react'
-import axios from 'axios'
+import api from '../api.js'
 import './Login.css'
-
-const API_BASE = 'http://localhost:3001/api'
 
 function Login({ onLogin }) {
   const [isLogin, setIsLogin] = useState(true)
@@ -23,7 +21,7 @@ function Login({ onLogin }) {
 
     try {
       const endpoint = isLogin ? '/auth/login' : '/auth/register'
-      const response = await axios.post(`${API_BASE}${endpoint}`, {
+      const response = await api.post(endpoint, {
         username: form.username,
         password: form.password
       })
