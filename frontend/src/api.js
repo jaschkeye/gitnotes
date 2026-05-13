@@ -1,7 +1,9 @@
 import axios from 'axios'
 
-// 生产环境使用Railway后端地址，开发环境使用本地地址
-const API_BASE = import.meta.env.VITE_API_URL || 'http://gitnotes-backend.railway.internal:3001/api'
+// VITE_API_URL is set at build time via frontend/.env.production for Railway deployments.
+// Falls back to the Railway internal DNS for server-side rendering scenarios,
+// but browser clients must use the public backend URL set in VITE_API_URL.
+const API_BASE = import.meta.env.VITE_API_URL || 'https://gitnotes-backend-production.up.railway.app/api'
 
 // 创建axios实例
 const api = axios.create({
