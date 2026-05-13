@@ -9,11 +9,42 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
-// 中间件 - CORS 允许所有来源（生产环境可限制）
+// 中间件 - CORS 配置
+const allowedOrigins = [
+  // Railway frontend domains
+  'https://gitnotes-frontend-production.up.railway.app',
+  // Allow any *.up.railway.app subdomain for flexibility across Railway environments
+  /^https:\/\/.*\.up\.railway\.app$/,
+  // Local development
+  'http://localhost:5173',
+  'http://localhost:3000',
+  // Allow requests with no origin (e.g. mobile apps, curl, internal Railway calls)
+];
+
 app.use(cors({
-  origin: true,
-  credentials: true
+  origin: (origin, callback) => {
+    // Allow requests with no origin (server-to-server, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    const isAllowed = allowedOrigins.some((allowed) =>
+      allowed instanceof RegExp ? allowed.test(origin) : allowed === origin
+    );
+
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS blocked request from origin: ${origin}`);
+      callback(new Error(`CORS policy: origin ${origin} is not allowed`));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// Handle preflight OPTIONS requests explicitly
+app.options('*', cors());
+
 app.use(express.json({ limit: '10mb' }));
 
 // ============================================================

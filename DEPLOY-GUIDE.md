@@ -58,7 +58,7 @@ git push -u origin main
    - **Publish Directory**: `dist`
    - **Root Directory**: `frontend`
 4. 添加环境变量：
-   - `VITE_API_URL`: `https://gitnotes-backend.onrender.com/api`
+   - `VITE_API_URL`: `https://gitnotes-backend-production.up.railway.app/api`（替换为你的Railway后端公共域名）
 5. 点击 **"Create Static Site"**
 
 ### 步骤4：等待部署完成
