@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const mysql = require('mysql2/promise');
 require('dotenv').config();
 
 const app = express();
@@ -17,42 +18,131 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 // ============================================================
-// 内存数据库（生产环境应替换为MySQL/PostgreSQL）
+// MySQL数据库连接配置（Railway自动注入环境变量）
 // ============================================================
-let users = [];
-let snippets = [];
-let studyLogs = [];
+let db;
+let useDatabase = false;
+
+async function initDatabase() {
+  try {
+    // 检查是否有数据库环境变量
+    if (process.env.DB_HOST && process.env.DB_USER && process.env.DB_PASSWORD && process.env.DB_NAME) {
+      db = await mysql.createConnection({
+        host: process.env.DB_HOST,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME,
+        port: process.env.DB_PORT || 3306
+      });
+      
+      console.log('✅ MySQL数据库连接成功');
+      useDatabase = true;
+      
+      // 初始化数据库表
+      await initTables();
+    } else {
+      console.log('⚠️ 未配置数据库环境变量，使用内存存储');
+      useDatabase = false;
+    }
+  } catch (error) {
+    console.error('❌ 数据库连接失败:', error.message);
+    console.log('⚠️ 回退到内存存储');
+    useDatabase = false;
+  }
+}
+
+async function initTables() {
+  try {
+    // 创建用户表
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS users (
+        user_id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // 创建代码片段表
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS snippets (
+        snippet_id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        language VARCHAR(50) NOT NULL,
+        code_content TEXT NOT NULL,
+        tags JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+      )
+    `);
+    
+    // 创建学习日志表
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS study_logs (
+        log_id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        content TEXT NOT NULL,
+        study_date DATE NOT NULL,
+        duration_minutes INT DEFAULT 0,
+        tags JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+      )
+    `);
+    
+    // 创建用量统计表
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS usage_stats (
+        stat_id INT AUTO_INCREMENT PRIMARY KEY,
+        stat_date DATE UNIQUE NOT NULL,
+        total_users INT DEFAULT 0,
+        total_calls INT DEFAULT 0,
+        total_tokens INT DEFAULT 0
+      )
+    `);
+    
+    console.log('✅ 数据库表初始化完成');
+  } catch (error) {
+    console.error('❌ 数据库表初始化失败:', error.message);
+  }
+}
+
+// ============================================================
+// 内存数据库（备用，当MySQL不可用时）
+// ============================================================
+let memoryUsers = [];
+let memorySnippets = [];
+let memoryStudyLogs = [];
 let nextUserId = 1;
 let nextSnippetId = 1;
 let nextLogId = 1;
 
 // ============================================================
-// 用量统计（内存存储，生产环境应持久化到数据库）
+// 用量统计
 // ============================================================
 const usageStats = {
   today: new Date().toISOString().split('T')[0],
-  totalUsers: 0,       // 今日独立用户数
-  totalCalls: 0,       // 今日AI调用次数
-  totalTokens: 0,      // 今日消耗Token数
-  dailyHistory: []     // 历史记录
+  totalUsers: 0,
+  totalCalls: 0,
+  totalTokens: 0,
+  dailyHistory: []
 };
 
-// 每日零点重置
 const checkDayReset = () => {
   const today = new Date().toISOString().split('T')[0];
   if (usageStats.today !== today) {
-    // 保存昨日数据到历史
     usageStats.dailyHistory.push({
       date: usageStats.today,
       users: usageStats.totalUsers,
       calls: usageStats.totalCalls,
       tokens: usageStats.totalTokens
     });
-    // 只保留最近30天
     if (usageStats.dailyHistory.length > 30) {
       usageStats.dailyHistory.shift();
     }
-    // 重置今日统计
     usageStats.today = today;
     usageStats.totalUsers = 0;
     usageStats.totalCalls = 0;
@@ -60,25 +150,38 @@ const checkDayReset = () => {
   }
 };
 
-// 记录一次AI调用
 const recordUsage = (userId) => {
   checkDayReset();
   usageStats.totalCalls++;
-  // 用Set去重统计独立用户（简化：直接计数，生产环境用Set）
   usageStats.totalUsers = Math.max(usageStats.totalUsers, userId);
 };
 
-// 初始化一个默认用户
+// 初始化默认用户
 const initDefaultUser = async () => {
-  const hashedPassword = await bcrypt.hash('admin123', 10);
-  users.push({
-    user_id: nextUserId++,
-    username: 'admin',
-    password: hashedPassword,
-    created_at: new Date().toISOString()
-  });
+  if (useDatabase) {
+    try {
+      const [existing] = await db.execute('SELECT * FROM users WHERE username = ?', ['admin']);
+      if (existing.length === 0) {
+        const hashedPassword = await bcrypt.hash('admin123', 10);
+        await db.execute(
+          'INSERT INTO users (username, password) VALUES (?, ?)',
+          ['admin', hashedPassword]
+        );
+        console.log('✅ 默认用户admin已创建');
+      }
+    } catch (error) {
+      console.error('❌ 创建默认用户失败:', error.message);
+    }
+  } else {
+    const hashedPassword = await bcrypt.hash('admin123', 10);
+    memoryUsers.push({
+      user_id: nextUserId++,
+      username: 'admin',
+      password: hashedPassword,
+      created_at: new Date().toISOString()
+    });
+  }
 };
-initDefaultUser();
 
 // ============================================================
 // JWT认证中间件
@@ -128,10 +231,9 @@ async function callKimi(prompt, code, retries = 3, delay = 2000) {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         },
-        timeout: 30000  // 增加超时到30秒
+        timeout: 30000
       });
 
-      // 记录Token消耗（Kimi API返回usage字段）
       const usage = response.data.usage;
       if (usage) {
         checkDayReset();
@@ -143,7 +245,6 @@ async function callKimi(prompt, code, retries = 3, delay = 2000) {
     } catch (error) {
       console.error(`Kimi: 第${attempt}次尝试失败 - ${error.message}`);
       
-      // 如果是429（过载）或5xx错误，且还有重试次数，则等待后重试
       if ((error.response?.status === 429 || error.response?.status >= 500) && attempt < retries) {
         const waitTime = delay * attempt;
         console.log(`Kimi: 服务器过载，${waitTime/1000}秒后重试...`);
@@ -151,7 +252,6 @@ async function callKimi(prompt, code, retries = 3, delay = 2000) {
         continue;
       }
       
-      // 最后一次失败或非重试错误
       if (attempt === retries) {
         console.error('Kimi: 所有重试失败，返回null触发本地降级');
       }
@@ -161,46 +261,46 @@ async function callKimi(prompt, code, retries = 3, delay = 2000) {
   return null;
 }
 
-// 本地规则引擎（AI服务不可用时的降级方案）
+// ============================================================
+// 本地标签引擎
+// ============================================================
 function localTagEngine(code) {
-  const rules = [
-    { keywords: ['function', '=>', 'def ', 'func '], tag: '函数' },
-    { keywords: ['class ', 'struct ', 'interface '], tag: '类/对象' },
-    { keywords: ['for ', 'while ', 'forEach'], tag: '循环' },
-    { keywords: ['if ', 'else', 'switch '], tag: '条件判断' },
-    { keywords: ['import ', 'require(', 'from '], tag: '模块化' },
-    { keywords: ['async ', 'await ', 'Promise'], tag: '异步编程' },
-    { keywords: ['try ', 'catch', 'except '], tag: '异常处理' },
-    { keywords: ['SELECT ', 'INSERT ', 'UPDATE '], tag: '数据库' },
-    { keywords: ['useState', 'useEffect', 'useRef'], tag: 'React Hook' },
-    { keywords: ['console.log', 'print('], tag: '调试输出' },
-    { keywords: ['map(', 'filter(', 'reduce('], tag: '函数式编程' },
-    { keywords: ['addEventListener', 'onClick'], tag: '事件处理' },
-    { keywords: ['fetch(', 'axios'], tag: '网络请求' },
-    { keywords: ['fs.', 'readFile', 'writeFile'], tag: '文件操作' },
-    { keywords: ['return ', 'yield '], tag: '返回值' },
-    { keywords: ['sort(', 'quickSort'], tag: '算法' },
-    { keywords: ['display:', 'flex', 'grid'], tag: 'CSS布局' },
-  ];
-
-  const matchedTags = [];
-  const seen = new Set();
-
-  for (const rule of rules) {
-    for (const kw of rule.keywords) {
-      if (code.includes(kw) && !seen.has(rule.tag)) {
-        matchedTags.push(rule.tag);
-        seen.add(rule.tag);
-        break;
-      }
+  const tags = new Set();
+  
+  const patterns = {
+    '递归': /\b(recursion|recursive|function.*calls?.*itself)\b|\b\w+\s*\([^)]*\)\s*\{[\s\S]*?\b\w+\s*\([^)]*\)\s*\{/i,
+    '排序': /\b(sort|sorted|bubble|quick|merge|heap)\b|\b(arrays?|lists?)\s*\.\s*sort\b/i,
+    '分治': /\b(divide.*conquer|binary.*search|merge.*sort|quick.*sort)\b/i,
+    '动态规划': /\b(dp|dynamic.*programming|memoization|fibonacci|knapsack)\b/i,
+    '贪心': /\b(greedy|optimal|minimum|maximum)\b/i,
+    '回溯': /\b(backtrack|backtracking|permutation|combination)\b/i,
+    '树': /\b(tree|binary|node|root|leaf|bst)\b/i,
+    '图': /\b(graph|vertex|edge|dfs|bfs|dijkstra)\b/i,
+    '链表': /\b(linked.*list|listnode|next|pointer)\b/i,
+    '栈': /\b(stack|push|pop|peek)\b/i,
+    '队列': /\b(queue|enqueue|dequeue|fifo)\b/i,
+    '哈希': /\b(hash|map|dict|set|key.*value)\b/i,
+    '字符串': /\b(string|char|substring|regex|match)\b/i,
+    '数组': /\b(array|list\[|index|length)\b/i,
+    '异步': /\b(async|await|promise|callback|then)\b/i,
+    '错误处理': /\b(try|catch|error|exception|throw)\b/i,
+    'API': /\b(fetch|axios|http|request|api)\b/i,
+    'DOM': /\b(document|window|querySelector|getElementById)\b/i,
+    '事件': /\b(event|listener|click|submit|onload)\b/i,
+    '组件': /\b(component|props|state|render|jsx)\b/i
+  };
+  
+  for (const [tag, pattern] of Object.entries(patterns)) {
+    if (pattern.test(code)) {
+      tags.add(tag);
     }
   }
-
-  return matchedTags.length > 0 ? matchedTags.slice(0, 5) : ['代码片段', '待分类'];
+  
+  return Array.from(tags).slice(0, 5);
 }
 
 // ============================================================
-// 用户认证API
+// 认证路由
 // ============================================================
 
 // 用户注册
@@ -212,47 +312,43 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: '用户名和密码不能为空' });
     }
     
-    if (username.length < 3 || username.length > 20) {
-      return res.status(400).json({ error: '用户名长度应在3-20个字符之间' });
-    }
-    
-    if (password.length < 6) {
-      return res.status(400).json({ error: '密码长度至少为6个字符' });
-    }
-    
-    const existingUser = users.find(u => u.username === username);
-    if (existingUser) {
-      return res.status(409).json({ error: '用户名已被注册' });
-    }
-    
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    const newUser = {
-      user_id: nextUserId++,
-      username,
-      password: hashedPassword,
-      created_at: new Date().toISOString()
-    };
-    
-    users.push(newUser);
-    
-    const token = jwt.sign(
-      { userId: newUser.user_id, username: newUser.username },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-    
-    res.json({
-      message: '注册成功',
-      token,
-      user: {
-        user_id: newUser.user_id,
-        username: newUser.username
+    if (useDatabase) {
+      const [result] = await db.execute(
+        'INSERT INTO users (username, password) VALUES (?, ?)',
+        [username, hashedPassword]
+      );
+      
+      const token = jwt.sign({ userId: result.insertId, username }, JWT_SECRET, { expiresIn: '7d' });
+      res.json({ 
+        message: '注册成功', 
+        token,
+        user: { user_id: result.insertId, username }
+      });
+    } else {
+      if (memoryUsers.find(u => u.username === username)) {
+        return res.status(400).json({ error: '用户名已存在' });
       }
-    });
+      
+      const newUser = {
+        user_id: nextUserId++,
+        username,
+        password: hashedPassword,
+        created_at: new Date().toISOString()
+      };
+      memoryUsers.push(newUser);
+      
+      const token = jwt.sign({ userId: newUser.user_id, username }, JWT_SECRET, { expiresIn: '7d' });
+      res.json({ 
+        message: '注册成功', 
+        token,
+        user: { user_id: newUser.user_id, username }
+      });
+    }
   } catch (error) {
     console.error('注册失败:', error);
-    res.status(500).json({ error: '注册失败，请稍后重试' });
+    res.status(500).json({ error: '注册失败: ' + error.message });
   }
 });
 
@@ -261,348 +357,301 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
-    if (!username || !password) {
-      return res.status(400).json({ error: '用户名和密码不能为空' });
+    let user;
+    if (useDatabase) {
+      const [rows] = await db.execute('SELECT * FROM users WHERE username = ?', [username]);
+      user = rows[0];
+    } else {
+      user = memoryUsers.find(u => u.username === username);
     }
     
-    const user = users.find(u => u.username === username);
     if (!user) {
       return res.status(401).json({ error: '用户名或密码错误' });
     }
     
-    const isValidPassword = await bcrypt.compare(password, user.password);
-    if (!isValidPassword) {
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
       return res.status(401).json({ error: '用户名或密码错误' });
     }
     
-    const token = jwt.sign(
-      { userId: user.user_id, username: user.username },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-    
-    res.json({
-      message: '登录成功',
+    const token = jwt.sign({ userId: user.user_id, username }, JWT_SECRET, { expiresIn: '7d' });
+    res.json({ 
+      message: '登录成功', 
       token,
-      user: {
-        user_id: user.user_id,
-        username: user.username
-      }
+      user: { user_id: user.user_id, username }
     });
   } catch (error) {
     console.error('登录失败:', error);
-    res.status(500).json({ error: '登录失败，请稍后重试' });
+    res.status(500).json({ error: '登录失败: ' + error.message });
   }
-});
-
-// 验证令牌
-app.get('/api/auth/verify', authenticateToken, (req, res) => {
-  res.json({
-    valid: true,
-    user: {
-      user_id: req.user.userId,
-      username: req.user.username
-    }
-  });
 });
 
 // ============================================================
-// 代码片段API
+// 代码片段路由
 // ============================================================
 
-app.get('/api/snippets', authenticateToken, (req, res) => {
-  const { language, tag } = req.query;
-  const userId = req.user.userId;
-  
-  let result = snippets.filter(s => s.user_id === userId);
-  
-  if (language) {
-    result = result.filter(s => s.language === language);
-  }
-  if (tag) {
-    result = result.filter(s => s.tags.includes(tag));
-  }
-  
-  res.json(result);
-});
-
-app.post('/api/snippets', authenticateToken, (req, res) => {
-  const { title, language, code_content, tags } = req.body;
-  const userId = req.user.userId;
-  
-  if (!title || !code_content) {
-    return res.status(400).json({ error: '标题和代码内容不能为空' });
-  }
-  
-  const newSnippet = {
-    snippet_id: nextSnippetId++,
-    user_id: userId,
-    title,
-    language: language || 'javascript',
-    code_content,
-    tags: JSON.stringify(tags || []),
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
-  
-  snippets.unshift(newSnippet);
-  res.json({ id: newSnippet.snippet_id, message: '代码片段创建成功' });
-});
-
-app.delete('/api/snippets/:id', authenticateToken, (req, res) => {
-  const id = parseInt(req.params.id);
-  const userId = req.user.userId;
-  
-  const snippet = snippets.find(s => s.snippet_id === id && s.user_id === userId);
-  if (!snippet) {
-    return res.status(404).json({ error: '代码片段不存在或无权限删除' });
-  }
-  
-  snippets = snippets.filter(s => !(s.snippet_id === id && s.user_id === userId));
-  res.json({ message: '删除成功' });
-});
-
-app.get('/api/snippets/search', authenticateToken, (req, res) => {
-  const { q } = req.query;
-  const userId = req.user.userId;
-  
-  let result = snippets.filter(s => s.user_id === userId);
-  
-  if (!q) return res.json(result);
-  
-  const filtered = result.filter(s =>
-    s.title.toLowerCase().includes(q.toLowerCase()) ||
-    s.code_content.toLowerCase().includes(q.toLowerCase()) ||
-    s.tags.toLowerCase().includes(q.toLowerCase())
-  );
-  
-  res.json(filtered);
-});
-
-app.post('/api/snippets/semantic-search', authenticateToken, async (req, res) => {
-  const { query } = req.body;
-  const userId = req.user.userId;
-  
-  const userSnippets = snippets.filter(s => s.user_id === userId);
-  
-  const snippetList = userSnippets.map(s => `ID:${s.snippet_id} 标题:${s.title} 语言:${s.language}`);
-  const prompt = `从以下代码片段中找出最相关的3-5个，只返回ID号，用逗号分隔。\n\n${snippetList.join('\n')}\n\n查询：${query}`;
-  
-  const aiResult = await callKimi(prompt, '');
-  
-  if (aiResult) {
-    const ids = aiResult.match(/\d+/g);
-    if (ids && ids.length > 0) {
-      const matched = userSnippets.filter(s => ids.includes(String(s.snippet_id)));
-      return res.json(matched);
-    }
-  }
-  
-  const keywords = query.toLowerCase().split(/\s+/);
-  const scored = userSnippets.map(s => {
-    let score = 0;
-    const text = `${s.title} ${s.tags} ${s.language}`.toLowerCase();
-    keywords.forEach(kw => {
-      if (text.includes(kw)) score += 2;
-      if (s.code_content.toLowerCase().includes(kw)) score += 1;
-    });
-    return { ...s, score };
-  }).filter(s => s.score > 0).sort((a, b) => b.score - a.score).slice(0, 5);
-  
-  res.json(scored);
-});
-
-// ============================================================
-// AI标签推荐 - Kimi
-// ============================================================
-app.post('/api/ai/tags', authenticateToken, async (req, res) => {
-  const { code } = req.body;
-  
-  if (!code || code.trim().length < 5) {
-    return res.status(400).json({ error: '代码内容太短' });
-  }
-  
-  const codePreview = code.substring(0, 500);
-  const prompt = `你是一个代码分析专家。请分析下面的代码，只返回一个JSON数组格式的标签列表（如["递归","排序","分治"]），不要有任何其他文字解释。`;
-  
-  // 记录本次AI调用
-  recordUsage(req.user.userId);
-  
-  const aiResult = await callKimi(prompt, codePreview);
-  
-  if (aiResult) {
-    try {
-      // 尝试多种方式解析标签
-      let tags = null;
+// 获取代码片段列表
+app.get('/api/snippets', authenticateToken, async (req, res) => {
+  try {
+    const { language, search } = req.query;
+    let snippets;
+    
+    if (useDatabase) {
+      let query = 'SELECT * FROM snippets WHERE user_id = ?';
+      const params = [req.user.userId];
       
-      // 方式1: 标准JSON数组
-      const jsonMatch = aiResult.match(/\[.*?\]/s);
-      if (jsonMatch) {
-        try {
-          tags = JSON.parse(jsonMatch[0]);
-        } catch (e) {
-          // JSON解析失败，继续尝试其他方式
-        }
+      if (language && language !== 'all') {
+        query += ' AND language = ?';
+        params.push(language);
       }
       
-      // 方式2: 如果上面失败，尝试提取引号中的中文词组
-      if (!tags || !Array.isArray(tags)) {
-        const chineseTags = aiResult.match(/[""'']?([\u4e00-\u9fa5]{2,6})[""'']?(?:\s*,\s*|\s*])/g);
-        if (chineseTags) {
-          tags = chineseTags.map(t => t.replace(/[""''\[\],]/g, '').trim()).filter(t => t.length >= 2);
-        }
+      if (search) {
+        query += ' AND (title LIKE ? OR code_content LIKE ?)';
+        params.push(`%${search}%`, `%${search}%`);
       }
       
-      // 方式3: 逗号分隔的中文词组
-      if (!tags || !Array.isArray(tags) || tags.length === 0) {
-        const commaTags = aiResult.split(/[,，、]/).map(t => t.replace(/[""''\[\]]/g, '').trim()).filter(t => t.length >= 2 && /[\u4e00-\u9fa5]/.test(t));
-        if (commaTags.length > 0) {
-          tags = commaTags.slice(0, 5);
-        }
-      }
+      query += ' ORDER BY created_at DESC';
       
-      // 最终验证
-      if (tags && Array.isArray(tags) && tags.length > 0) {
-        // 清理标签：去除空白和特殊字符
-        tags = tags.map(t => t.replace(/[\[\]"'\s]/g, '').trim()).filter(t => t.length >= 2);
-        if (tags.length > 0) {
-          return res.json({ tags: tags.slice(0, 5), source: 'kimi' });
+      const [rows] = await db.execute(query, params);
+      snippets = rows.map(row => ({
+        ...row,
+        tags: JSON.parse(row.tags || '[]')
+      }));
+    } else {
+      snippets = memorySnippets
+        .filter(s => s.user_id === req.user.userId)
+        .filter(s => !language || language === 'all' || s.language === language)
+        .filter(s => !search || s.title.includes(search) || s.code_content.includes(search))
+        .reverse();
+    }
+    
+    res.json(snippets);
+  } catch (error) {
+    console.error('获取代码片段失败:', error);
+    res.status(500).json({ error: '获取代码片段失败' });
+  }
+});
+
+// 创建代码片段
+app.post('/api/snippets', authenticateToken, async (req, res) => {
+  try {
+    const { title, language, code_content, tags } = req.body;
+    
+    if (useDatabase) {
+      const [result] = await db.execute(
+        'INSERT INTO snippets (user_id, title, language, code_content, tags) VALUES (?, ?, ?, ?, ?)',
+        [req.user.userId, title, language, code_content, JSON.stringify(tags || [])]
+      );
+      
+      res.json({ 
+        message: '保存成功', 
+        snippet_id: result.insertId 
+      });
+    } else {
+      const newSnippet = {
+        snippet_id: nextSnippetId++,
+        user_id: req.user.userId,
+        title,
+        language,
+        code_content,
+        tags: tags || [],
+        created_at: new Date().toISOString()
+      };
+      memorySnippets.push(newSnippet);
+      
+      res.json({ 
+        message: '保存成功', 
+        snippet_id: newSnippet.snippet_id 
+      });
+    }
+  } catch (error) {
+    console.error('保存代码片段失败:', error);
+    res.status(500).json({ error: '保存代码片段失败' });
+  }
+});
+
+// AI标签推荐
+app.post('/api/snippets/analyze', authenticateToken, async (req, res) => {
+  try {
+    const { code } = req.body;
+    
+    recordUsage(req.user.userId);
+    
+    const prompt = '你是一个代码分析专家。请分析下面的代码，只返回一个JSON数组格式的标签列表（如["递归","排序","分治"]），不要有任何其他文字解释。';
+    
+    const aiResult = await callKimi(prompt, code);
+    
+    if (aiResult) {
+      try {
+        let tags = null;
+        const jsonMatch = aiResult.match(/\[.*?\]/s);
+        if (jsonMatch) {
+          try { tags = JSON.parse(jsonMatch[0]); } catch (e) {}
         }
-      }
-    } catch (e) {
-      console.error('Kimi标签解析失败:', e.message);
+        
+        if (!tags || !Array.isArray(tags)) {
+          const chineseTags = aiResult.match(/[""'']?([\u4e00-\u9fa5]{2,6})[""'']?(?:\s*,\s*|\s*])/g);
+          if (chineseTags) {
+            tags = chineseTags.map(t => t.replace(/[""''\[\],]/g, '').trim()).filter(t => t.length >= 2);
+          }
+        }
+        
+        if (!tags || !Array.isArray(tags) || tags.length === 0) {
+          const commaTags = aiResult.split(/[,，、]/).map(t => t.replace(/[""''\[\]]/g, '').trim()).filter(t => t.length >= 2 && /[\u4e00-\u9fa5]/.test(t));
+          if (commaTags.length > 0) { tags = commaTags.slice(0, 5); }
+        }
+        
+        if (tags && Array.isArray(tags) && tags.length > 0) {
+          tags = tags.map(t => t.replace(/[\[\]"'\s]/g, '').trim()).filter(t => t.length >= 2);
+          if (tags.length > 0) { return res.json({ tags: tags.slice(0, 5), source: 'kimi' }); }
+        }
+      } catch (e) { console.error('Kimi标签解析失败:', e.message); }
     }
+    
+    const tags = localTagEngine(code);
+    res.json({ tags, source: 'local' });
+  } catch (error) {
+    console.error('AI分析失败:', error);
+    const tags = localTagEngine(code);
+    res.json({ tags, source: 'local' });
   }
-  
-  // 所有方式都失败，使用本地引擎
-  const tags = localTagEngine(code);
-  res.json({ tags, source: 'local' });
 });
 
 // ============================================================
-// 学习日志API
+// 学习日志路由
 // ============================================================
 
-app.get('/api/logs', authenticateToken, (req, res) => {
-  const userId = req.user.userId;
-  const userLogs = studyLogs.filter(l => l.user_id === userId);
-  res.json(userLogs);
-});
-
-app.post('/api/logs', authenticateToken, (req, res) => {
-  const { title, content, study_hours, log_date } = req.body;
-  const userId = req.user.userId;
-  
-  if (!title) {
-    return res.status(400).json({ error: '标题不能为空' });
-  }
-  
-  const newLog = {
-    log_id: nextLogId++,
-    user_id: userId,
-    title,
-    content: content || '',
-    study_hours: study_hours || 0,
-    log_date: log_date || new Date().toISOString().split('T')[0],
-    created_at: new Date().toISOString()
-  };
-  
-  studyLogs.unshift(newLog);
-  res.json({ id: newLog.log_id, message: '日志创建成功' });
-});
-
-app.delete('/api/logs/:id', authenticateToken, (req, res) => {
-  const id = parseInt(req.params.id);
-  const userId = req.user.userId;
-  
-  const log = studyLogs.find(l => l.log_id === id && l.user_id === userId);
-  if (!log) {
-    return res.status(404).json({ error: '日志不存在或无权限删除' });
-  }
-  
-  studyLogs = studyLogs.filter(l => !(l.log_id === id && l.user_id === userId));
-  res.json({ message: '删除成功' });
-});
-
-// ============================================================
-// 统计看板API
-// ============================================================
-app.get('/api/stats', authenticateToken, (req, res) => {
-  const userId = req.user.userId;
-  
-  const userSnippets = snippets.filter(s => s.user_id === userId);
-  const userLogs = studyLogs.filter(l => l.user_id === userId);
-  
-  const languageMap = {};
-  userSnippets.forEach(s => {
-    languageMap[s.language] = (languageMap[s.language] || 0) + 1;
-  });
-  const languageDistribution = Object.entries(languageMap).map(([name, value]) => ({ name, value }));
-  
-  const dailyStudy = {};
-  for (let i = 13; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    dailyStudy[date.toISOString().split('T')[0]] = 0;
-  }
-  userLogs.forEach(log => {
-    if (dailyStudy.hasOwnProperty(log.log_date)) {
-      dailyStudy[log.log_date] += log.study_hours;
+// 获取学习日志列表
+app.get('/api/study-logs', authenticateToken, async (req, res) => {
+  try {
+    let logs;
+    
+    if (useDatabase) {
+      const [rows] = await db.execute(
+        'SELECT * FROM study_logs WHERE user_id = ? ORDER BY study_date DESC',
+        [req.user.userId]
+      );
+      logs = rows.map(row => ({
+        ...row,
+        tags: JSON.parse(row.tags || '[]')
+      }));
+    } else {
+      logs = memoryStudyLogs
+        .filter(l => l.user_id === req.user.userId)
+        .sort((a, b) => new Date(b.study_date) - new Date(a.study_date));
     }
-  });
-  const dailyStudyData = Object.entries(dailyStudy).map(([date, hours]) => ({
-    date,
-    hours: parseFloat(hours.toFixed(1))
-  }));
-  
-  const heatmapData = [];
-  for (let i = 83; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    const dateStr = date.toISOString().split('T')[0];
-    const dayLogs = userLogs.filter(l => l.log_date === dateStr);
-    const daySnippets = userSnippets.filter(s => s.created_at && s.created_at.startsWith(dateStr));
-    const count = dayLogs.length + daySnippets.length;
-    heatmapData.push({ date: dateStr, count, level: count === 0 ? 0 : count <= 1 ? 1 : count <= 2 ? 2 : count <= 3 ? 3 : 4 });
+    
+    res.json(logs);
+  } catch (error) {
+    console.error('获取学习日志失败:', error);
+    res.status(500).json({ error: '获取学习日志失败' });
   }
-  
-  const totalSnippets = userSnippets.length;
-  const totalLogs = userLogs.length;
-  const totalHours = userLogs.reduce((sum, l) => sum + l.study_hours, 0);
-  const totalTags = new Set(userSnippets.flatMap(s => JSON.parse(s.tags || '[]'))).size;
-  const activeDays = new Set([...userLogs.map(l => l.log_date), ...userSnippets.map(s => s.created_at ? s.created_at.split('T')[0] : '')]).size;
-  
-  const tagMap = {};
-  userSnippets.forEach(s => {
-    JSON.parse(s.tags || '[]').forEach(tag => {
-      tagMap[tag] = (tagMap[tag] || 0) + 1;
-    });
-  });
-  const topTags = Object.entries(tagMap).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, value]) => ({ name, value }));
-  
-  res.json({
-    overview: { totalSnippets, totalLogs, totalHours: parseFloat(totalHours.toFixed(1)), totalTags, activeDays },
-    languageDistribution,
-    dailyStudy: dailyStudyData,
-    heatmap: heatmapData,
-    topTags,
-    languageHours: []
-  });
+});
+
+// 创建学习日志
+app.post('/api/study-logs', authenticateToken, async (req, res) => {
+  try {
+    const { title, content, study_date, duration_minutes, tags } = req.body;
+    
+    if (useDatabase) {
+      const [result] = await db.execute(
+        'INSERT INTO study_logs (user_id, title, content, study_date, duration_minutes, tags) VALUES (?, ?, ?, ?, ?, ?)',
+        [req.user.userId, title, content, study_date, duration_minutes || 0, JSON.stringify(tags || [])]
+      );
+      
+      res.json({ 
+        message: '保存成功', 
+        log_id: result.insertId 
+      });
+    } else {
+      const newLog = {
+        log_id: nextLogId++,
+        user_id: req.user.userId,
+        title,
+        content,
+        study_date,
+        duration_minutes: duration_minutes || 0,
+        tags: tags || [],
+        created_at: new Date().toISOString()
+      };
+      memoryStudyLogs.push(newLog);
+      
+      res.json({ 
+        message: '保存成功', 
+        log_id: newLog.log_id 
+      });
+    }
+  } catch (error) {
+    console.error('保存学习日志失败:', error);
+    res.status(500).json({ error: '保存学习日志失败' });
+  }
 });
 
 // ============================================================
-// 用量统计API（需要认证）
+// 统计路由
 // ============================================================
+
+// 获取统计数据
+app.get('/api/stats', authenticateToken, async (req, res) => {
+  try {
+    let stats = {
+      totalSnippets: 0,
+      totalLogs: 0,
+      totalStudyMinutes: 0,
+      languageDistribution: [],
+      recentActivity: []
+    };
+    
+    if (useDatabase) {
+      const [snippetCount] = await db.execute(
+        'SELECT COUNT(*) as count FROM snippets WHERE user_id = ?',
+        [req.user.userId]
+      );
+      stats.totalSnippets = snippetCount[0].count;
+      
+      const [logData] = await db.execute(
+        'SELECT COUNT(*) as count, SUM(duration_minutes) as total_minutes FROM study_logs WHERE user_id = ?',
+        [req.user.userId]
+      );
+      stats.totalLogs = logData[0].count;
+      stats.totalStudyMinutes = logData[0].total_minutes || 0;
+      
+      const [langDist] = await db.execute(
+        'SELECT language, COUNT(*) as count FROM snippets WHERE user_id = ? GROUP BY language',
+        [req.user.userId]
+      );
+      stats.languageDistribution = langDist;
+    } else {
+      const userSnippets = memorySnippets.filter(s => s.user_id === req.user.userId);
+      const userLogs = memoryStudyLogs.filter(l => l.user_id === req.user.userId);
+      
+      stats.totalSnippets = userSnippets.length;
+      stats.totalLogs = userLogs.length;
+      stats.totalStudyMinutes = userLogs.reduce((sum, l) => sum + (l.duration_minutes || 0), 0);
+      
+      const langCount = {};
+      userSnippets.forEach(s => {
+        langCount[s.language] = (langCount[s.language] || 0) + 1;
+      });
+      stats.languageDistribution = Object.entries(langCount).map(([language, count]) => ({ language, count }));
+    }
+    
+    res.json(stats);
+  } catch (error) {
+    console.error('获取统计数据失败:', error);
+    res.status(500).json({ error: '获取统计数据失败' });
+  }
+});
+
+// 获取用量统计
 app.get('/api/usage', authenticateToken, (req, res) => {
   checkDayReset();
   res.json({
-    today: {
-      date: usageStats.today,
-      users: usageStats.totalUsers,
-      calls: usageStats.totalCalls,
-      tokens: usageStats.totalTokens
-    },
-    history: usageStats.dailyHistory.slice(-7) // 最近7天
+    today: usageStats.today,
+    totalUsers: usageStats.totalUsers,
+    totalCalls: usageStats.totalCalls,
+    totalTokens: usageStats.totalTokens,
+    history: usageStats.dailyHistory.slice(-7)
   });
 });
 
@@ -612,20 +661,26 @@ app.get('/api/usage', authenticateToken, (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    message: 'Git笔记服务器运行正常',
-    mode: 'production',
-    ai: process.env.AI_API_KEY ? 'Kimi AI' : '本地降级模式'
+    timestamp: new Date().toISOString(),
+    database: useDatabase ? 'connected' : 'memory',
+    version: '1.0.0'
   });
 });
 
 // ============================================================
-// 启动服务器
+// 启动服务
 // ============================================================
-app.listen(PORT, () => {
-  console.log(`╔══════════════════════════════════════╗`);
-  console.log(`║   Git笔记 生产环境服务已启动          ║`);
-  console.log(`║   地址: http://localhost:${PORT}          ║`);
-  console.log(`║   模式: 多用户 + JWT认证              ║`);
-  console.log(`║   AI:   ${process.env.AI_API_KEY ? 'Kimi AI' : '本地降级模式'}     ║`);
-  console.log(`╚══════════════════════════════════════╝`);
-});
+async function startServer() {
+  await initDatabase();
+  await initDefaultUser();
+  
+  app.listen(PORT, () => {
+    console.log('╔══════════════════════════════════════╗');
+    console.log('║     GitNotes 生产环境服务已启动      ║');
+    console.log(`║     端口: ${PORT}                      ║`);
+    console.log(`║     数据库: ${useDatabase ? 'MySQL' : '内存'}                ║`);
+    console.log('╚══════════════════════════════════════╝');
+  });
+}
+
+startServer().catch(console.error);
