@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: gitnotes-backend
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server-prod.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AI_API_KEY
+        sync: false
+    plan: free
+
+  - type: web
+    name: gitnotes-frontend
+    runtime: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://gitnotes-backend.onrender.com/api
+    plan: free
