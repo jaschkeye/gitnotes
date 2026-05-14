@@ -26,27 +26,38 @@ const dbConfig = {
 
 let pool;
 async function initDB() {
-    pool = await mysql.createPool(dbConfig);
-    // 初始化表结构（如果不存在）
-    await pool.execute(`
-        CREATE TABLE IF NOT EXISTS users (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            username VARCHAR(255) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL
-        )
-    `);
-    await pool.execute(`
-        CREATE TABLE IF NOT EXISTS snippets (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT,
-            title VARCHAR(255),
-            content TEXT,
-            language VARCHAR(50),
-            tags JSON,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-    console.log('MySQL Database Connected');
+    try {
+        pool = await mysql.createPool(dbConfig);
+        // 初始化表结构（如果不存在）
+        await pool.execute(`
+            CREATE TABLE IF NOT EXISTS users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                username VARCHAR(255) UNIQUE NOT NULL,
+                password VARCHAR(255) NOT NULL
+            )
+        `);
+        await pool.execute(`
+            CREATE TABLE IF NOT EXISTS snippets (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT,
+                title VARCHAR(255),
+                content TEXT,
+                language VARCHAR(50),
+                tags JSON,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('MySQL Database Connected');
+    } catch (error) {
+        console.error('Failed to initialize database:', error.message);
+        console.error('DB Config:', {
+            host: dbConfig.host ? 'SET' : 'MISSING',
+            user: dbConfig.user ? 'SET' : 'MISSING',
+            database: dbConfig.database ? 'SET' : 'MISSING',
+            port: dbConfig.port
+        });
+        throw error;
+    }
 }
 
 // --- 用户认证模块 ---
