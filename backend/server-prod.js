@@ -15,24 +15,21 @@ app.use(cors({ origin: true }));
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'gitnotes-secret-key-2025';
 
-// 【数据库连接】使用 Railway 私有网络连接 MySQL
-// Railway 中服务间通过 <service-name>.railway.internal 通信
+// 【数据库连接】直接使用 Railway MySQL 私有网络地址
+// Railway 中 MySQL 服务的私有域名为 mysql.railway.internal
 const dbConfig = {
-    host: process.env.MYSQLHOST || process.env.DB_HOST || 'mysql.railway.internal',
-    user: process.env.MYSQLUSER || process.env.DB_USER || 'root',
-    password: process.env.MYSQLPASSWORD || process.env.DB_PASSWORD || '',
-    database: process.env.MYSQLDATABASE || process.env.DB_NAME || 'railway',
-    port: parseInt(process.env.MYSQLPORT) || parseInt(process.env.DB_PORT) || 3306
+    host: 'mysql.railway.internal',
+    user: process.env.MYSQLUSER || 'root',
+    password: process.env.MYSQLPASSWORD || '',
+    database: process.env.MYSQLDATABASE || 'railway',
+    port: parseInt(process.env.MYSQLPORT) || 3306
 };
 
-// 打印实际 DB 配置用于调试
 console.log('DB Config:', {
     host: dbConfig.host,
     user: dbConfig.user ? '***' : 'MISSING',
     database: dbConfig.database,
-    port: dbConfig.port,
-    env_MYSQLHOST: process.env.MYSQLHOST ? 'SET' : 'UNSET',
-    env_DB_HOST: process.env.DB_HOST ? `"${process.env.DB_HOST}"` : 'UNSET'
+    port: dbConfig.port
 });
 
 let pool;
