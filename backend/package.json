@@ -1,22 +1,17 @@
 {
   "name": "gitnotes-backend",
   "version": "1.0.0",
-  "description": "Git笔记后端服务",
   "main": "server-prod.js",
   "scripts": {
-    "start": "node server-prod.js",
-    "dev": "node server-prod.js"
+    "start": "node server-prod.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "axios": "^1.6.0",
-    "bcryptjs": "^3.0.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.3",
-    "mysql2": "^3.6.0"
+    "mysql2": "^3.6.0",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5",
+    "jsonwebtoken": "^9.0.1",
+    "bcryptjs": "^2.4.3",
+    "axios": "^1.4.0"
   }
 }
