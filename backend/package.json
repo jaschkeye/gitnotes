@@ -2,10 +2,10 @@
   "name": "gitnotes-backend",
   "version": "1.0.0",
   "description": "Git笔记后端服务",
-  "main": "server.js",
+  "main": "server-prod.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server-prod.js",
+    "dev": "node server-prod.js"
   },
   "keywords": [],
   "author": "",
