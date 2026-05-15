@@ -3,7 +3,7 @@ import axios from 'axios'
 // API基础地址配置
 // Railway部署：使用后端生成的公网域名
 // 开发环境：使用本地地址
-const API_BASE = import.meta.env.VITE_API_URL || 'https://gitnotes-backend-production.up.railway.app/api'
+const API_BASE = import.meta.env.VITE_API_URL || 'https://gitnotes-backend-production-8997.up.railway.app/api'
 
 // 创建axios实例
 const api = axios.create({

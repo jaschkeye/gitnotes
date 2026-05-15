@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import axios from 'axios'
+import api from './api'
 import Login from './pages/Login'
 import Snippets from './pages/Snippets'
 import StudyLogs from './pages/StudyLogs'
@@ -27,7 +28,7 @@ function App() {
       if (savedUser && savedToken) {
         try {
           // 验证token是否有效
-          await axios.get('http://localhost:3001/api/auth/verify')
+          await api.get('/auth/verify')
           setUser(JSON.parse(savedUser))
         } catch (error) {
           // token无效，清除本地存储
