@@ -29,8 +29,7 @@ console.log('DB Config:', {
     user: dbConfig.user ? 'SET' : 'MISSING',
     password: dbConfig.password ? 'SET' : 'MISSING',
     database: dbConfig.database,
-    port: dbConfig.port,
-    source: mysqlUrl ? 'MYSQL_URL' : 'env vars'
+    port: dbConfig.port
 });
 
 let pool;
