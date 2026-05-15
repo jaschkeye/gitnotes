@@ -15,13 +15,13 @@ app.use(cors({ origin: true }));
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'gitnotes-secret-key-2025';
 
-// 【数据库连接】使用 Railway 共享环境变量
+// 【数据库连接】使用 Railway MySQL 私有网络
 const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'railway',
-    port: parseInt(process.env.DB_PORT) || 3306
+    host: 'mysql.railway.internal',
+    user: process.env.MYSQLUSER || 'root',
+    password: process.env.MYSQLPASSWORD || '',
+    database: process.env.MYSQLDATABASE || 'railway',
+    port: parseInt(process.env.MYSQLPORT) || 3306
 };
 
 console.log('DB Config:', {
