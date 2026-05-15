@@ -15,20 +15,47 @@ app.use(cors({ origin: true }));
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'gitnotes-secret-key-2025';
 
-// 【数据库连接】使用 Railway 共享变量
-const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'railway',
-    port: parseInt(process.env.DB_PORT) || 3306
-};
+// 【数据库连接】优先使用 MYSQL_URL（Railway MySQL 自动提供），回退到共享变量
+let dbConfig;
+const mysqlUrl = process.env.MYSQL_URL;
+if (mysqlUrl) {
+    // MYSQL_URL 格式: mysql://root:password@host:3306/database
+    try {
+        const url = new URL(mysqlUrl);
+        dbConfig = {
+            host: url.hostname,
+            user: url.username,
+            password: url.password,
+            database: url.pathname.slice(1),
+            port: parseInt(url.port) || 3306
+        };
+    } catch (e) {
+        console.error('Failed to parse MYSQL_URL:', e.message);
+        dbConfig = {
+            host: process.env.DB_HOST || 'localhost',
+            user: process.env.DB_USER || 'root',
+            password: process.env.DB_PASSWORD || '',
+            database: process.env.DB_NAME || 'railway',
+            port: parseInt(process.env.DB_PORT) || 3306
+        };
+    }
+} else {
+    dbConfig = {
+        host: process.env.DB_HOST || 'localhost',
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_NAME || 'railway',
+        port: parseInt(process.env.DB_PORT) || 3306
+    };
+}
 
 console.log('DB Config:', {
     host: dbConfig.host,
-    user: dbConfig.user ? '***' : 'MISSING',
+    user: dbConfig.user ? 'SET' : 'MISSING',
+    password: dbConfig.password ? 'SET' : 'MISSING',
     database: dbConfig.database,
-    port: dbConfig.port
+    port: dbConfig.port,
+    source: mysqlUrl ? 'MYSQL_URL' : 'env vars'
 });
 
 let pool;
