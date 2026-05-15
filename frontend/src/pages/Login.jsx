@@ -26,6 +26,15 @@ function Login({ onLogin }) {
         password: form.password
       })
 
+      if (!isLogin) {
+        // 注册成功，显示消息并切换到登录表单
+        setMessage('注册成功！请登录')
+        setIsLogin(true)
+        setForm({ ...form, password: '', confirmPassword: '' })
+        setLoading(false)
+        return
+      }
+
       // 保存token到localStorage
       localStorage.setItem('token', response.data.token)
       localStorage.setItem('user', JSON.stringify(response.data.user))
