@@ -3,8 +3,5 @@
   "build": {
     "builder": "RAILPACK",
     "buildCommand": "npm install && npm run build"
-  },
-  "deploy": {
-    "startCommand": "node node_modules/vite/bin/vite.js preview --port ${PORT:-3000} --host 0.0.0.0"
   }
 }
