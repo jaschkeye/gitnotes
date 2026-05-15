@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "startCommand": "npx serve dist -s -l ${PORT:-3000}",
+    "restartPolicyType": "on_failure"
+  },
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "npm install && npm run build"
+  }
+}
